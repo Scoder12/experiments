@@ -1,5 +1,6 @@
 import re
 import sys
+import unicodedata
 
 import requests
 import bs4
@@ -58,6 +59,37 @@ def print_search_results(html: str):
         tqdm.write(repr(out))
 
 
+def gen_normalized_query(title, author):
+    # Split on colon (subtitles) and parens (series info/editions)
+    clean_title = title.split(":")[0].split("(")[0]
+
+    # Normalize unicode (e.g., 'Kondō' -> 'Kondo')
+    # NFKD decomposes characters (ō -> o + ¯), then we filter non-ASCII
+    clean_title = unicodedata.normalize('NFKD', clean_title) \
+        .encode('ascii', 'ignore').decode('utf-8')
+    
+    # Replace non-alphanumeric with SPACE
+    clean_title = re.sub(r"[^a-zA-Z0-9]", " ", clean_title)
+    clean_title = re.sub(r"\s+", " ", clean_title).strip()
+    
+    # Normalize unicode for author too
+    clean_author = unicodedata.normalize('NFKD', author) \
+        .encode('ascii', 'ignore').decode('utf-8')
+    clean_author = re.sub(r"[^a-zA-Z0-9]", " ", clean_author)
+    clean_author = re.sub(r"\s+", " ", clean_author).strip()
+    
+    author_names = clean_author.split()
+    if len(author_names) > 1:
+        # Last name is usually the most significant index key in library systems
+        # Using just the last name often reduces noise from middle initials
+        # e.g. "Douglas Stone" -> "Stone"
+        final_author = author_names[-1]
+    else:
+        final_author = author_names[0]
+
+    return f"{clean_title} {final_author}"
+
+
 def main():
     if len(sys.argv) < 2 or sys.argv[1] not in {"phys", "ebook"}:
         print(f"Usage: {sys.argv[0]} <phys|ebook>", file=sys.stderr)
@@ -78,16 +110,8 @@ def main():
     sess = requests.Session()
     with tqdm(results) as tq:
         for title, author in tq:
-            title = title.split(":")[0].split("(")[0].strip()
-            title = re.sub(r"[^a-zA-Z0-9 ]", "", title)
-            author_names = author.split(" ")
-            author = (
-                " ".join((author_names[0], author_names[-1]))
-                if len(author_names) > 1
-                else author_names[0]
-            ).strip()
-            search = " ".join((title, author)).replace("  ", "")
-            html = search_func(sess, tq, search)
+            query = gen_normalized_query(title, author)
+            html = search_func(sess, tq, query)
             print_search_results(html)
 
 
